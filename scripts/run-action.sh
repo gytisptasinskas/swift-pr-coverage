@@ -47,7 +47,7 @@ if [[ "${INPUT_POST_COMMENT:-true}" == "true" && ( "$event" == "pull_request" ||
 fi
 
 report="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/swift-pr-coverage.md"
-"$bin" "${args[@]}" --output markdown > "$report"
+"$bin" "${args[@]}" --output markdown --verbose > "$report"
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   cat "$report" >> "$GITHUB_STEP_SUMMARY"

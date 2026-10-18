@@ -121,7 +121,7 @@ public struct GitHubClient: Sendable {
         if !query.isEmpty {
             components.queryItems = query
         }
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: components.url!, timeoutInterval: 30)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")

@@ -52,12 +52,16 @@ struct SwiftPRCoverage: AsyncParsableCommand {
     @Option(help: "Commit that line links point to. Defaults to the commit --head resolves to.")
     var headSha: String?
 
+    @Flag(help: "Log each command run and how long it took, on stderr.")
+    var verbose = false
+
     @Option(help: ArgumentHelp("Above this many changed files, read the whole coverage archive instead of one file at a time.", visibility: .hidden))
     var fullDumpThreshold = 20
 
     private var environment: [String: String] { ProcessInfo.processInfo.environment }
 
     func run() async throws {
+        Log.verbose = verbose
         let root = try repoRoot.map(absolute) ?? Git.topLevel(from: FileManager.default.currentDirectoryPath)
         let report = try await makeReport(repoRoot: root)
         let markdown = MarkdownRenderer(links: links(repoRoot: root))
@@ -87,6 +91,7 @@ struct SwiftPRCoverage: AsyncParsableCommand {
         let candidates = changes
             .map(\.path)
             .filter { path in path.hasSuffix(".swift") && !excludes.contains { $0.matches(path) } }
+        Log.debug("\(changes.count) changed files, \(candidates.count) to check for coverage")
 
         var warnings: [String] = []
         let bundles = xcresults.map(absolute).filter { path in
@@ -103,7 +108,7 @@ struct SwiftPRCoverage: AsyncParsableCommand {
         } else {
             var maps: [CoverageMap] = []
             for bundle in bundles {
-                maps.append(try await coverage(of: candidates, in: bundle, repoRoot: repoRoot))
+                maps.append(try coverage(of: candidates, in: bundle, repoRoot: repoRoot))
             }
             report = Analyzer(excludes: excludes).analyze(changes: changes, coverage: CoverageParser.merge(maps))
 
@@ -118,20 +123,24 @@ struct SwiftPRCoverage: AsyncParsableCommand {
     }
 
     /// Coverage of the given repo-relative files, keyed by repo-relative path.
-    private func coverage(of relativePaths: [String], in bundle: String, repoRoot: String) async throws -> CoverageMap {
+    private func coverage(of relativePaths: [String], in bundle: String, repoRoot: String) throws -> CoverageMap {
         let normalizer = PathNormalizer(repoRoot: repoRoot, recordedPaths: try XCCov.fileList(bundle))
         let recorded = relativePaths.compactMap(normalizer.recordedPath(forRelative:))
+        Log.debug("\(bundle): \(recorded.count) of \(relativePaths.count) files have coverage")
         guard !recorded.isEmpty else { return [:] }
 
         let raw: CoverageMap
         if recorded.count > fullDumpThreshold {
             raw = try XCCov.coverage(of: bundle)
         } else {
-            raw = try await withThrowingTaskGroup(of: CoverageMap.self) { group in
-                for path in recorded {
-                    group.addTask { try XCCov.coverage(ofFile: path, in: bundle) }
-                }
-                return try await group.reduce(into: CoverageMap()) { $0.merge($1) { $0.merging($1) } }
+            // Plain threads, not Swift concurrency: each call blocks until xccov exits.
+            let results = Locked([Result<CoverageMap, any Error>?](repeating: nil, count: recorded.count))
+            DispatchQueue.concurrentPerform(iterations: recorded.count) { index in
+                let result = Result { try XCCov.coverage(ofFile: recorded[index], in: bundle) }
+                results.withLock { $0[index] = result }
+            }
+            raw = try results.withLock { $0 }.reduce(into: CoverageMap()) { map, result in
+                map.merge(try result!.get()) { $0.merging($1) }
             }
         }
         return normalizer.coverage(raw, forRelative: relativePaths)
@@ -165,6 +174,7 @@ struct SwiftPRCoverage: AsyncParsableCommand {
         // Don't open a new comment just to say nothing changed; do overwrite a stale one.
         let hasFindings = report.files.contains { $0.executableLines > 0 } || !report.filesWithoutCoverage.isEmpty
 
+        Log.debug("Posting the comment to \(repository)#\(number)")
         do {
             switch try await client.upsertComment(
                 repository: repository,
@@ -205,5 +215,19 @@ struct SwiftPRCoverage: AsyncParsableCommand {
             .appendingPathComponent(path)
             .standardizedFileURL
             .path
+    }
+}
+
+/// A value guarded by a lock, for collecting results from `concurrentPerform`.
+private final class Locked<Value>: @unchecked Sendable {
+    private var value: Value
+    private let lock = NSLock()
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    func withLock<T>(_ body: (inout Value) throws -> T) rethrows -> T {
+        try lock.withLock { try body(&value) }
     }
 }
