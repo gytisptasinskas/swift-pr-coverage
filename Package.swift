@@ -15,14 +15,20 @@ let package = Package(
             name: "swift-pr-coverage",
             dependencies: [
                 "PRCoverageCore",
+                "GitHubClient",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
         .target(name: "PRCoverageCore"),
+        .target(name: "GitHubClient"),
         .testTarget(
             name: "PRCoverageCoreTests",
             dependencies: ["PRCoverageCore"],
             resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "GitHubClientTests",
+            dependencies: ["GitHubClient"]
         ),
     ],
     swiftLanguageModes: [.v6]

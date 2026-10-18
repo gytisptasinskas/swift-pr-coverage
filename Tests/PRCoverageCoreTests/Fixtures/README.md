@@ -12,6 +12,8 @@ Real output captured from `Example/` during the milestone 1 spike (Xcode 27.0, T
 | `xccov-archive.json` | `xccov view --archive --json` | Full dump, all 8 instrumented files, `codeCoverageMode: .relevant` (no test files). |
 | `xccov-file-list.txt` | `xccov view --archive --file-list` | Full run. Includes `Example/Derived/Sources/*`. |
 | `xccov-file-list-core-cached.txt` | same, `tuist test App` with `Core` served from the binary cache | `Core/Sources/*` and `Derived/Sources/TuistBundle+Core.swift` are absent. Test file present because the per-project `App` scheme instruments all targets. |
+| `test-results-summary-passed.json` | `xcresulttool get test-results summary --path <bundle> --compact` | Green run: `"result":"Passed"`. |
+| `test-results-summary-failed.json` | same | Run where `AppTests` could not launch its host app: `"result":"Failed"`, `failedTests: 1`. |
 | `git-diff-unified0.diff` | `git diff -M --unified=0 base...HEAD -- '*.swift'` | Synthetic base → current `Example/`. Covers an edit, a pure insertion, a 1-line hunk with no count (`@@ -20 +24 @@`), a rename with edits (`Math.swift` → `Calculator.swift`), a deleted file (`+++ /dev/null`), a new file (`--- /dev/null`), a test file and a Tuist manifest. Paths are repo-relative (`Example/...`). |
 
 ## Expected analysis (diff ∩ `xccov-archive.json`, prefix `/Users/runner/work/repo/repo/` stripped)

@@ -2,7 +2,7 @@
 
 Reports which added or changed Swift lines in a pull request were not executed by any test. It reads the `.xcresult` bundles from a [Tuist](https://tuist.dev) project's test run, intersects their per-line coverage with `git diff`, and prints the uncovered lines grouped by file.
 
-> **Status:** the command-line tool works locally. The GitHub Action (sticky PR comment and job summary) is in progress.
+> **Status:** the command-line tool works locally and can post the sticky PR comment. Packaging it as a GitHub Action is in progress.
 
 ## Requirements
 
@@ -51,7 +51,11 @@ No coverage data (cached, skipped or not instrumented):
 | `--repo-root <path>` | git top level | The directory that diff paths are relative to. |
 | `--exclude <glob>` | | Repeatable, e.g. `'**/Tests/**'`. `**` matches any number of directories. |
 | `--no-default-excludes` | | Turns off the default excludes: `**/Derived/**`, `**/Project.swift`, `**/Workspace.swift`, `**/Tuist.swift`, `**/Tuist/**`. |
-| `--output text\|json` | `text` | |
+| `--output text\|markdown\|json` | `text` | `markdown` is the PR comment body. In CI, append it to `$GITHUB_STEP_SUMMARY` for the job summary. |
+| `--post-comment` | | Creates or updates the sticky PR comment (marked `<!-- swift-pr-coverage -->`). Reads the token from `GITHUB_TOKEN`. |
+| `--repo <owner/name>` | `$GITHUB_REPOSITORY` | Used for the comment and for file/line links in Markdown. |
+| `--pr <number>` | from `$GITHUB_EVENT_PATH` | The pull request to comment on. |
+| `--head-sha <sha>` | commit of `--head` | The commit that line links point to. |
 
 How lines are counted:
 - A changed line is **covered** if it ran at least once.
@@ -60,7 +64,12 @@ How lines are counted:
 - Files missing from every bundle are listed separately; they are never counted as 0%. Tuist's binary cache and selective testing leave modules out of the report this way.
 - If no bundle exists (selective testing had nothing to run), the tool says no tests ran and exits 0.
 
-The tool exits non-zero only on tool errors, such as a bundle without coverage data, a failed `git diff`, or unreadable `xccov` output.
+More rules:
+- If any bundle has failed tests, the report starts with a warning. Targets whose tests never ran still appear in the coverage, with every line at 0.
+- `--post-comment` updates the existing comment when there is one. It creates a new comment only when there is something to report.
+- Posting with a read-only token (pull requests from forks) logs a warning and still exits 0.
+
+The tool exits non-zero only on tool errors, such as a bundle without coverage data, a failed `git diff`, unreadable `xccov` output, or `--post-comment` without a token, repository or PR number.
 
 ## Development
 
@@ -69,4 +78,4 @@ swift build
 swift test
 ```
 
-The core logic (`Sources/PRCoverageCore`) does no I/O. Its tests run on fixtures captured from `Example/`, a small Tuist app. See [Tests/PRCoverageCoreTests/Fixtures/README.md](Tests/PRCoverageCoreTests/Fixtures/README.md).
+The core logic (`Sources/PRCoverageCore`) does no I/O. `Sources/GitHubClient` handles the comment API, and its tests use a fake transport. Its tests run on fixtures captured from `Example/`, a small Tuist app. See [Tests/PRCoverageCoreTests/Fixtures/README.md](Tests/PRCoverageCoreTests/Fixtures/README.md).

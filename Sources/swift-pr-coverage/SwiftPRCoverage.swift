@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import GitHubClient
 import PRCoverageCore
 
 @main
@@ -11,6 +12,7 @@ struct SwiftPRCoverage: AsyncParsableCommand {
 
     enum OutputFormat: String, ExpressibleByArgument, CaseIterable {
         case text
+        case markdown
         case json
     }
 
@@ -38,17 +40,49 @@ struct SwiftPRCoverage: AsyncParsableCommand {
     @Option(help: "Output format.")
     var output: OutputFormat = .text
 
+    @Flag(help: "Create or update the sticky PR comment. Needs GITHUB_TOKEN.")
+    var postComment = false
+
+    @Option(help: "GitHub repository (owner/name) for links and the comment. Defaults to $GITHUB_REPOSITORY.")
+    var repo: String?
+
+    @Option(help: "Pull request number. Defaults to the number in $GITHUB_EVENT_PATH.")
+    var pr: Int?
+
+    @Option(help: "Commit that line links point to. Defaults to the commit --head resolves to.")
+    var headSha: String?
+
     @Option(help: ArgumentHelp("Above this many changed files, read the whole coverage archive instead of one file at a time.", visibility: .hidden))
     var fullDumpThreshold = 20
 
+    private var environment: [String: String] { ProcessInfo.processInfo.environment }
+
     func run() async throws {
-        let workingDirectory = FileManager.default.currentDirectoryPath
-        let root = try repoRoot.map(absolute) ?? Git.topLevel(from: workingDirectory)
+        let root = try repoRoot.map(absolute) ?? Git.topLevel(from: FileManager.default.currentDirectoryPath)
+        let report = try await makeReport(repoRoot: root)
+        let markdown = MarkdownRenderer(links: links(repoRoot: root))
+
+        switch output {
+        case .text:
+            print(TextRenderer.render(report), terminator: "")
+        case .markdown:
+            print(markdown.render(report), terminator: "")
+        case .json:
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            print(String(decoding: try encoder.encode(report), as: UTF8.self))
+        }
+
+        if postComment {
+            try await post(markdown.render(report), report: report)
+        }
+    }
+
+    private func makeReport(repoRoot: String) async throws -> CoverageReport {
         let diffText = try diff.map { try String(contentsOfFile: $0, encoding: .utf8) }
-            ?? Git.swiftDiff(base: base, head: head, in: root)
+            ?? Git.swiftDiff(base: base, head: head, in: repoRoot)
 
         let excludes = (noDefaultExcludes ? [] : Glob.defaultExcludes) + exclude.map(Glob.init)
-        let analyzer = Analyzer(excludes: excludes)
         let changes = DiffParser.parse(diffText)
         let candidates = changes
             .map(\.path)
@@ -69,20 +103,18 @@ struct SwiftPRCoverage: AsyncParsableCommand {
         } else {
             var maps: [CoverageMap] = []
             for bundle in bundles {
-                maps.append(try await coverage(of: candidates, in: bundle, repoRoot: root))
+                maps.append(try await coverage(of: candidates, in: bundle, repoRoot: repoRoot))
             }
-            report = analyzer.analyze(changes: changes, coverage: CoverageParser.merge(maps))
+            report = Analyzer(excludes: excludes).analyze(changes: changes, coverage: CoverageParser.merge(maps))
+
+            let failed = bundles.compactMap(XCResultTool.testSummary).filter(\.hasFailures)
+            if !failed.isEmpty {
+                let count = failed.reduce(0) { $0 + $1.failedTests }
+                warnings.insert(TestSummary.failureWarning(failedTests: count), at: 0)
+            }
         }
         report.warnings += warnings
-
-        switch output {
-        case .text:
-            print(TextRenderer.render(report), terminator: "")
-        case .json:
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            print(String(decoding: try encoder.encode(report), as: UTF8.self))
-        }
+        return report
     }
 
     /// Coverage of the given repo-relative files, keyed by repo-relative path.
@@ -103,6 +135,68 @@ struct SwiftPRCoverage: AsyncParsableCommand {
             }
         }
         return normalizer.coverage(raw, forRelative: relativePaths)
+    }
+
+    /// Links need a repository and a commit; without either, paths render as plain code.
+    private func links(repoRoot: String) -> MarkdownRenderer.Links? {
+        guard let repository = repo ?? environment["GITHUB_REPOSITORY"],
+              let commit = headSha ?? (try? Git.resolveCommit(head, in: repoRoot))
+        else { return nil }
+        return MarkdownRenderer.Links(
+            serverURL: environment["GITHUB_SERVER_URL"] ?? "https://github.com",
+            repository: repository,
+            commit: commit
+        )
+    }
+
+    private func post(_ body: String, report: CoverageReport) async throws {
+        guard let token = environment["GITHUB_TOKEN"], !token.isEmpty else {
+            throw ToolError("--post-comment needs a token in GITHUB_TOKEN.")
+        }
+        guard let repository = repo ?? environment["GITHUB_REPOSITORY"] else {
+            throw ToolError("--post-comment needs --repo or GITHUB_REPOSITORY.")
+        }
+        guard let number = pr ?? pullRequestFromEvent() else {
+            throw ToolError("--post-comment needs --pr, or GITHUB_EVENT_PATH from a pull_request event.")
+        }
+
+        let apiURL = environment["GITHUB_API_URL"].flatMap(URL.init(string:)) ?? URL(string: "https://api.github.com")!
+        let client = GitHubClient(token: token, apiURL: apiURL)
+        // Don't open a new comment just to say nothing changed; do overwrite a stale one.
+        let hasFindings = report.files.contains { $0.executableLines > 0 } || !report.filesWithoutCoverage.isEmpty
+
+        do {
+            switch try await client.upsertComment(
+                repository: repository,
+                pullRequest: number,
+                marker: MarkdownRenderer.marker,
+                body: body,
+                createIfMissing: hasFindings
+            ) {
+            case .created(let comment): Log.info("Created comment \(comment.htmlURL)")
+            case .updated(let comment): Log.info("Updated comment \(comment.htmlURL)")
+            case .skipped: Log.info("No existing comment and nothing to report; not creating one.")
+            }
+        } catch let error as GitHubError where error.isPermissionDenied {
+            // Fork PRs get a read-only token. The report is still in the output.
+            Log.warning("Could not post the PR comment (\(error)). Pull requests from forks get a read-only token.")
+        }
+    }
+
+    private func pullRequestFromEvent() -> Int? {
+        struct Event: Decodable {
+            struct PullRequest: Decodable { let number: Int }
+            let pullRequest: PullRequest?
+
+            enum CodingKeys: String, CodingKey {
+                case pullRequest = "pull_request"
+            }
+        }
+        guard let path = environment["GITHUB_EVENT_PATH"],
+              let data = FileManager.default.contents(atPath: path),
+              let event = try? JSONDecoder().decode(Event.self, from: data)
+        else { return nil }
+        return event.pullRequest?.number
     }
 
     private func absolute(_ path: String) -> String {
