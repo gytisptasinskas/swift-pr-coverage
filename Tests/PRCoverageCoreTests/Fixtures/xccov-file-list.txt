@@ -1,0 +1,8 @@
+/Users/runner/work/repo/repo/Example/App/Sources/CartModel.swift
+/Users/runner/work/repo/repo/Example/App/Sources/ContentView.swift
+/Users/runner/work/repo/repo/Example/App/Sources/ExampleApp.swift
+/Users/runner/work/repo/repo/Example/Core/Sources/Calculator.swift
+/Users/runner/work/repo/repo/Example/Core/Sources/PriceFormatter.swift
+/Users/runner/work/repo/repo/Example/Derived/Sources/TuistAssets+App.swift
+/Users/runner/work/repo/repo/Example/Derived/Sources/TuistBundle+App.swift
+/Users/runner/work/repo/repo/Example/Derived/Sources/TuistBundle+Core.swift
