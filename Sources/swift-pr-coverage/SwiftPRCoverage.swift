@@ -34,7 +34,7 @@ struct SwiftPRCoverage: AsyncParsableCommand {
     @Option(help: "Glob of repo-relative paths to skip, e.g. '**/Tests/**'. Repeatable.")
     var exclude: [String] = []
 
-    @Flag(help: "Don't skip Tuist-generated sources and manifests (**/Derived/**, Project.swift, Workspace.swift, Tuist.swift, Tuist/**).")
+    @Flag(help: "Don't skip Tuist-generated sources and manifests (**/Derived/**, Project.swift, Workspace.swift, Tuist.swift, Tuist/**, Package.swift).")
     var noDefaultExcludes = false
 
     @Option(help: "Output format.")

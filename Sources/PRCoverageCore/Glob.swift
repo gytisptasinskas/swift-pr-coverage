@@ -51,12 +51,13 @@ public struct Glob: Sendable, Equatable, CustomStringConvertible {
 }
 
 extension Glob {
-    /// Tuist-generated sources and manifests, which never carry useful coverage.
+    /// Tuist-generated sources and Tuist/SwiftPM manifests, which are never instrumented.
     public static let defaultExcludes: [Glob] = [
         "**/Derived/**",
         "**/Project.swift",
         "**/Workspace.swift",
         "**/Tuist.swift",
         "**/Tuist/**",
+        "**/Package.swift",
     ].map(Glob.init)
 }

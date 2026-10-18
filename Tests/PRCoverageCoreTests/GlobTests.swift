@@ -30,6 +30,8 @@ struct GlobTests {
             "Tuist.swift",
             "Tuist/Package.swift",
             "Tuist/ProjectDescriptionHelpers/Helpers.swift",
+            "Package.swift",
+            "Modules/Networking/Package.swift",
         ]
         for path in excluded {
             #expect(Glob.defaultExcludes.contains { $0.matches(path) }, "\(path)")

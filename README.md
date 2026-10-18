@@ -2,7 +2,7 @@
 
 Reports which added or changed Swift lines in a pull request were not executed by any test. It reads the `.xcresult` bundles from a [Tuist](https://tuist.dev) project's test run, intersects their per-line coverage with `git diff`, and prints the uncovered lines grouped by file.
 
-> **Status:** the command-line tool works locally and can post the sticky PR comment. Packaging it as a GitHub Action is in progress.
+> **Status:** early. The command-line tool and the composite action work; no tagged release yet, so pin a commit SHA.
 
 ## Requirements
 
@@ -22,6 +22,49 @@ Reports which added or changed Swift lines in a pull request were not executed b
   ```
 
   You can also run `tuist test -- -enableCodeCoverage YES`. `.relevant` is preferred because it instruments only the targets under test, so test files stay out of the report.
+
+## GitHub Action
+
+```yaml
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # git diff needs the merge base
+          ref: ${{ github.event.pull_request.head.sha }}  # line numbers match the commit links point to
+      - uses: jdx/mise-action@v5
+        with:
+          mise_toml: |
+            [tools]
+            tuist = "4.212.0"
+      - name: Test
+        run: tuist test --result-bundle-path build/Tests.xcresult
+      - uses: gytisptasinskas/swift-pr-coverage@<sha>
+        if: always()  # still report when tests fail
+        with:
+          xcresult-path: build/Tests.xcresult
+```
+
+The action builds the tool from source the first time and caches the binary. It posts or updates one sticky comment and writes the same report to the job summary.
+
+| Input | Default | |
+|---|---|---|
+| `xcresult-path` | required | Relative to `working-directory`. One per line to merge several bundles. |
+| `base-ref` | PR base commit | Outside pull requests, the default branch. |
+| `exclude` | | Extra globs, one per line. |
+| `post-comment` | `true` | Only applies to `pull_request` and `pull_request_target` events. |
+| `github-token` | `github.token` | Needs `pull-requests: write`. On fork PRs the token is read-only: the action warns, and the job summary still has the report. |
+| `working-directory` | `.` | |
+
+Output: `report-path` is the Markdown report file.
 
 ## Local usage
 
@@ -50,7 +93,7 @@ No coverage data (cached, skipped or not instrumented):
 | `--diff <file>` | | Reads a ready-made `git diff --unified=0` from a file instead of running git. |
 | `--repo-root <path>` | git top level | The directory that diff paths are relative to. |
 | `--exclude <glob>` | | Repeatable, e.g. `'**/Tests/**'`. `**` matches any number of directories. |
-| `--no-default-excludes` | | Turns off the default excludes: `**/Derived/**`, `**/Project.swift`, `**/Workspace.swift`, `**/Tuist.swift`, `**/Tuist/**`. |
+| `--no-default-excludes` | | Turns off the default excludes: `**/Derived/**`, `**/Project.swift`, `**/Workspace.swift`, `**/Tuist.swift`, `**/Tuist/**`, `**/Package.swift`. |
 | `--output text\|markdown\|json` | `text` | `markdown` is the PR comment body. In CI, append it to `$GITHUB_STEP_SUMMARY` for the job summary. |
 | `--post-comment` | | Creates or updates the sticky PR comment (marked `<!-- swift-pr-coverage -->`). Reads the token from `GITHUB_TOKEN`. |
 | `--repo <owner/name>` | `$GITHUB_REPOSITORY` | Used for the comment and for file/line links in Markdown. |
@@ -77,5 +120,7 @@ The tool exits non-zero only on tool errors, such as a bundle without coverage d
 swift build
 swift test
 ```
+
+CI runs `swift test`. The `E2E` workflow runs the action from the checkout against `Example/` on every pull request and checks that the sticky comment matches the report.
 
 The core logic (`Sources/PRCoverageCore`) does no I/O. `Sources/GitHubClient` handles the comment API, and its tests use a fake transport. Its tests run on fixtures captured from `Example/`, a small Tuist app. See [Tests/PRCoverageCoreTests/Fixtures/README.md](Tests/PRCoverageCoreTests/Fixtures/README.md).
