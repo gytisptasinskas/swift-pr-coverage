@@ -1,0 +1,78 @@
+name: Swift PR Code Coverage
+description: Comment on pull requests with the changed Swift lines that no test executed, from Tuist .xcresult bundles.
+author: Gytis Ptašinskas
+branding:
+  icon: check-square
+  color: orange
+
+inputs:
+  xcresult-path:
+    description: Path to an .xcresult bundle, relative to working-directory. One per line to merge several.
+    required: true
+  base-ref:
+    description: Ref or SHA to diff against. Defaults to the pull request's base commit, or the default branch outside pull requests.
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
+  exclude:
+    description: Globs of repo-relative paths to skip, one per line. Added to the defaults (**/Derived/**, Tuist and SwiftPM manifests).
+    required: false
+    default: ''
+  post-comment:
+    description: Create or update the sticky PR comment on pull_request events.
+    required: false
+    default: 'true'
+  github-token:
+    description: Token used to post the comment. Needs pull-requests write permission.
+    required: false
+    default: ${{ github.token }}
+  working-directory:
+    description: Directory to run in. xcresult-path is relative to it.
+    required: false
+    default: .
+
+outputs:
+  report-path:
+    description: Path to the Markdown report (the comment body).
+    value: ${{ steps.report.outputs.report-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute build cache key
+      id: cache-key
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        sources=$(cat Package.swift Package.resolved $(find Sources -name '*.swift' | LC_ALL=C sort) | shasum -a 256 | cut -c1-16)
+        toolchain=$(swift --version 2>/dev/null | head -n 1 | shasum -a 256 | cut -c1-8)
+        echo "key=swift-pr-coverage-${RUNNER_OS}-${RUNNER_ARCH}-${toolchain}-${sources}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore swift-pr-coverage binary
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ github.action_path }}/bin
+        key: ${{ steps.cache-key.outputs.key }}
+
+    - name: Build swift-pr-coverage
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        swift build -c release --product swift-pr-coverage
+        mkdir -p bin
+        cp "$(swift build -c release --show-bin-path)/swift-pr-coverage" bin/
+
+    - name: Report coverage
+      id: report
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SWIFT_PR_COVERAGE_BIN: ${{ github.action_path }}/bin/swift-pr-coverage
+        INPUT_XCRESULT_PATH: ${{ inputs.xcresult-path }}
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_POST_COMMENT: ${{ inputs.post-comment }}
+        INPUT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: '"$GITHUB_ACTION_PATH/scripts/run-action.sh"'

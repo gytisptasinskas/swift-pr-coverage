@@ -1,0 +1,23 @@
+.DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Test output
+build/
+*.xcresult
+
+# Tuist-generated
+*.xcodeproj
+*.xcworkspace
+Derived/
+graph.dot
+Tuist/.build/
+
+# Xcode
+xcuserdata/
+DerivedData/
+
+# Action binary cache (action.yml)
+/bin/

@@ -1,0 +1,66 @@
+name: E2E
+
+# Runs the action from this checkout against Example/ on every pull request,
+# then checks that the sticky comment matches the report.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  example:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: jdx/mise-action@v5
+        with:
+          mise_toml: |
+            [tools]
+            tuist = "4.212.0"
+
+      - name: Test Example
+        working-directory: Example
+        run: tuist test --no-selective-testing --result-bundle-path build/Tests.xcresult
+
+      - name: Swift PR Code Coverage
+        id: coverage
+        if: always()
+        uses: ./
+        with:
+          xcresult-path: Example/build/Tests.xcresult
+          # The tool's own sources aren't part of Example's test run.
+          exclude: |
+            Sources/**
+            Tests/**
+
+      - name: Verify comment
+        # Fork PRs get a read-only token, so the action only warns there.
+        if: always() && steps.coverage.outcome == 'success' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.coverage.outputs.report-path }}
+          COMMENTS_URL: repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments
+        run: |
+          comment=$(gh api "$COMMENTS_URL" --paginate --jq '.[] | select(.body | contains("<!-- swift-pr-coverage -->")) | .body')
+          if [[ -z "$comment" ]]; then
+            # The action only creates a comment when there is something to report.
+            if grep -qE '^\| File \||changed executable lines are covered|No coverage data' "$REPORT"; then
+              echo "::error::The report has findings but no sticky comment exists."
+              exit 1
+            fi
+            echo "No comment, and the report has no findings. OK."
+            exit 0
+          fi
+          if [[ "$comment" != "$(cat "$REPORT")" ]]; then
+            echo "::error::The sticky comment does not match this run's report."
+            diff <(echo "$comment") "$REPORT" || true
+            exit 1
+          fi
+          echo "Sticky comment matches the report."
